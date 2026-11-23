@@ -1,0 +1,55 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sergi Alberich <salberich@singulargroup.com>
+Date: Wed, 11 Nov 2026 09:28:31 +0100
+Subject: [PATCH 3/3] cinder-csi-plugin: wire direct iSCSI into the plugin
+
+---
+ cmd/cinder-csi-plugin/main.go         | 7 +++++++
+ pkg/csi/cinder/openstack/openstack.go | 5 +++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/cmd/cinder-csi-plugin/main.go b/cmd/cinder-csi-plugin/main.go
+index 88bb86c..4ac4442 100644
+--- a/cmd/cinder-csi-plugin/main.go
++++ b/cmd/cinder-csi-plugin/main.go
+@@ -24,6 +24,7 @@ import (
+ 	"github.com/spf13/pflag"
+ 	"k8s.io/cloud-provider-openstack/pkg/csi"
+ 	"k8s.io/cloud-provider-openstack/pkg/csi/cinder"
++	"k8s.io/cloud-provider-openstack/pkg/csi/cinder/directiscsi"
+ 	"k8s.io/cloud-provider-openstack/pkg/csi/cinder/openstack"
+ 	"k8s.io/cloud-provider-openstack/pkg/util/metadata"
+ 	"k8s.io/cloud-provider-openstack/pkg/util/mount"
+@@ -130,6 +131,9 @@ func handle() {
+ 		}
+ 
+ 		d.SetupControllerService(clouds)
++		if err := directiscsi.SetupController(cloudConfig); err != nil {
++			klog.Fatalf("Failed to set up direct iSCSI: %v", err)
++		}
+ 	}
+ 
+ 	if provideNodeService {
+@@ -146,6 +150,9 @@ func handle() {
+ 		metadata := metadata.GetMetadataProvider(cfg.Metadata.SearchOrder)
+ 
+ 		d.SetupNodeService(mount, metadata, cfg.BlockStorage, additionalTopologies)
++		if err := directiscsi.SetupNode(cloudConfig); err != nil {
++			klog.Fatalf("Failed to set up direct iSCSI: %v", err)
++		}
+ 	}
+ 
+ 	d.Run()
+diff --git a/pkg/csi/cinder/openstack/openstack.go b/pkg/csi/cinder/openstack/openstack.go
+index 7402a61..86031a6 100644
+--- a/pkg/csi/cinder/openstack/openstack.go
++++ b/pkg/csi/cinder/openstack/openstack.go
+@@ -241,3 +241,8 @@ func GetOpenStackProvider(cloudName string) (IOpenStack, error) {
+ func (os *OpenStack) GetMetadataOpts() metadata.Opts {
+ 	return os.metadataOpts
+ }
++
++// BlockStorageClient returns the Cinder client, for the direct iSCSI hooks.
++func (os *OpenStack) BlockStorageClient() *gophercloud.ServiceClient {
++	return os.blockstorage
++}

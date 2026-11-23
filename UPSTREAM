@@ -1,0 +1,5 @@
+# Upstream source the image is built from (sourced by build.sh). Bumping it
+# means refreshing patches/ against the new tag and running the tests.
+UPSTREAM_REPO=https://github.com/kubernetes/cloud-provider-openstack.git
+UPSTREAM_TAG=v1.36.0
+UPSTREAM_COMMIT=bae07f4939caf612e71c43a3a65eaa42cc2bfbae

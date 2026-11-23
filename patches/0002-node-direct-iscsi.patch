@@ -1,0 +1,110 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sergi Alberich <salberich@singulargroup.com>
+Date: Wed, 11 Nov 2026 09:28:31 +0100
+Subject: [PATCH 2/3] cinder-csi-plugin: direct iSCSI hooks in the node
+
+---
+ pkg/csi/cinder/nodeserver.go | 48 +++++++++++++++++++++++++++++-------
+ 1 file changed, 39 insertions(+), 9 deletions(-)
+
+diff --git a/pkg/csi/cinder/nodeserver.go b/pkg/csi/cinder/nodeserver.go
+index ee91ae0..c5c9083 100644
+--- a/pkg/csi/cinder/nodeserver.go
++++ b/pkg/csi/cinder/nodeserver.go
+@@ -31,6 +31,7 @@ import (
+ 	utilpath "k8s.io/utils/path"
+ 
+ 	sharedcsi "k8s.io/cloud-provider-openstack/pkg/csi"
++	"k8s.io/cloud-provider-openstack/pkg/csi/cinder/directiscsi"
+ 	"k8s.io/cloud-provider-openstack/pkg/csi/cinder/openstack"
+ 	"k8s.io/cloud-provider-openstack/pkg/util/blockdevice"
+ 	"k8s.io/cloud-provider-openstack/pkg/util/metadata"
+@@ -121,8 +122,11 @@ func nodePublishVolumeForBlock(req *csi.NodePublishVolumeRequest, ns *nodeServer
+ 
+ 	m := ns.Mount
+ 
+-	// Do not trust the path provided by cinder, get the real path on node
+-	source, err := getDevicePath(volumeID, m)
++	source, err := directiscsi.BlockDevicePath(volumeID)
++	if err == nil && source == "" {
++		// Do not trust the path provided by cinder, get the real path on node
++		source, err = getDevicePath(volumeID, m)
++	}
+ 	if err != nil {
+ 		return nil, status.Errorf(codes.Internal, "Unable to find Device path for volume: %v", err)
+ 	}
+@@ -190,10 +194,20 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
+ 	}
+ 
+ 	m := ns.Mount
+-	// Do not trust the path provided by cinder, get the real path on node
+-	devicePath, err := getDevicePath(volumeID, m)
+-	if err != nil {
+-		return nil, status.Errorf(codes.Internal, "Unable to find Device path for volume: %v", err)
++	direct := directiscsi.IsDirect(req.GetPublishContext())
++	var devicePath string
++	var err error
++	if direct {
++		devicePath, err = directiscsi.NodeStage(ctx, volumeID, req.GetPublishContext())
++		if err != nil {
++			return nil, err
++		}
++	} else {
++		// Do not trust the path provided by cinder, get the real path on node
++		devicePath, err = getDevicePath(volumeID, m)
++		if err != nil {
++			return nil, status.Errorf(codes.Internal, "Unable to find Device path for volume: %v", err)
++		}
+ 	}
+ 
+ 	if blk := volumeCapability.GetBlock(); blk != nil {
+@@ -220,7 +234,11 @@ func (ns *nodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
+ 			options = append(options, collectMountOptions(fsType, mountFlags)...)
+ 		}
+ 		// Mount
+-		err = ns.formatAndMountRetry(devicePath, stagingTarget, fsType, options)
++		if direct {
++			err = m.Mounter().FormatAndMount(devicePath, stagingTarget, fsType, options)
++		} else {
++			err = ns.formatAndMountRetry(devicePath, stagingTarget, fsType, options)
++		}
+ 		if err != nil {
+ 			return nil, status.Error(codes.Internal, err.Error())
+ 		}
+@@ -282,6 +300,9 @@ func (ns *nodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
+ 	if err != nil {
+ 		return nil, status.Errorf(codes.Internal, "Unmount of targetPath %s failed with error %v", stagingTargetPath, err)
+ 	}
++	if err := directiscsi.NodeUnstage(ctx, volumeID); err != nil {
++		return nil, err
++	}
+ 
+ 	return &csi.NodeUnstageVolumeResponse{}, nil
+ }
+@@ -379,7 +400,15 @@ func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
+ 		return nil, status.Error(codes.InvalidArgument, "Volume path not provided")
+ 	}
+ 
+-	_, err := blockdevice.IsBlockDevice(volumePath)
++	direct, err := directiscsi.NodeExpand(ctx, volumeID, req.GetCapacityRange().GetRequiredBytes())
++	if err != nil {
++		return nil, err
++	}
++	if direct && req.GetVolumeCapability().GetBlock() != nil {
++		return &csi.NodeExpandVolumeResponse{}, nil
++	}
++
++	_, err = blockdevice.IsBlockDevice(volumePath)
+ 	if err != nil {
+ 		return nil, status.Errorf(codes.NotFound, "Failed to determine device path for volumePath %s: %v", volumePath, err)
+ 	}
+@@ -394,7 +423,8 @@ func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandV
+ 		return nil, status.Error(codes.Internal, "Unable to find Device path for volume")
+ 	}
+ 
+-	if ns.Opts.RescanOnResize {
++	// The multipath map of a direct volume was rescanned and resized above.
++	if ns.Opts.RescanOnResize && !direct {
+ 		// comparing current volume size with the expected one
+ 		newSize := req.GetCapacityRange().GetRequiredBytes()
+ 		if err := blockdevice.RescanBlockDeviceGeometry(devicePath, volumePath, newSize); err != nil {
