@@ -4,10 +4,10 @@ How this repo is built and why. Applies to people and agents alike.
 
 ## What it is
 
-Upstream's Cinder CSI plugin plus the `directiscsi` package and three small
-hooks into upstream (`patches/`). Everything else is upstream at `UPSTREAM`,
-untouched: a change goes in `directiscsi/` whenever it can, and a patch stays a
-hook that calls into it.
+The `directiscsi` Go package. It is built into upstream's Cinder CSI plugin by
+the `singular-group/cloud-provider-openstack` fork, whose branch adds only the
+hooks that call it; the fork builds and publishes the image. No patches over an
+upstream release here: a change to upstream code is a commit on the fork.
 
 ## Rules
 
@@ -19,16 +19,13 @@ hook that calls into it.
 - No references to any particular deployment, company or infrastructure:
   this repo is generic and public. Test data uses `example.com` IQNs,
   `node-N` names and documentation IP ranges.
-- Bumping `UPSTREAM` means refreshing `patches/` against the new tag and the
-  full test run.
+- `go.mod` pins the upstream `k8s.io/cloud-provider-openstack` release the
+  fork's branch is based on; both move together.
 
 ## Versions
 
-Derived from git, never written by hand: `<x.y.z tag>.<commits since it>`,
-counted at the last commit that changed the image (`UPSTREAM`, `build.sh`,
-`patches/`, `directiscsi/` outside `*_test.go`). CI builds each version once on
-merge to `main` and pushes `:<version>` and `:latest`. A new `x.y` is the only
-manual act: `git tag -a 1.1.0 -m '...' && git push origin 1.1.0`.
+Go module tags `vX.Y.Z`, cut after a merge to `main`. The fork's `go.mod`
+then moves to the new tag; the image version is the fork's.
 
 ## Workflow
 

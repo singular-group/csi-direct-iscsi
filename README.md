@@ -7,10 +7,12 @@ mapped to every node, and a SCSI-3 persistent reservation decides which node may
 write. Moving a volume to another node is a reservation PREEMPT on that node, with
 no Cinder, Nova or array mapping call on the way.
 
-The image is upstream at `UPSTREAM`, `patches/` applied in order (three small
-hooks into the controller, node and config code) and `directiscsi/` copied in as
-`pkg/csi/cinder/directiscsi/`. The driver name stays `cinder.csi.openstack.org`:
-it replaces upstream's image in an existing deployment.
+This repo is the Go package `directiscsi`. The plugin that runs it is the
+[singular-group/cloud-provider-openstack](https://github.com/singular-group/cloud-provider-openstack)
+fork: a branch on upstream's release tag whose only changes are the hooks that
+call this package and the go.mod line that pulls it in. That fork builds and
+publishes the image. The driver name stays `cinder.csi.openstack.org`: the image
+replaces upstream's in an existing deployment.
 
 ## How a volume is attached
 
@@ -83,21 +85,19 @@ A `[DirectISCSI]` section in any of the `--cloud-config` files; without
 ## Building and testing
 
 ```bash
-./build.sh .src                      # patched upstream tree in .src
-cd .src
-go vet ./pkg/csi/cinder/... ./cmd/cinder-csi-plugin/
-go test ./pkg/csi/cinder/... ./pkg/util/... ./tests/sanity/cinder/
-sudo go test -race ./pkg/csi/cinder/directiscsi/   # the chroot test needs root
-docker build --target cinder-csi-plugin -t csi-direct-iscsi .
+go vet ./...
+go test ./...
+sudo go test -race ./...   # the chroot test needs root
 ```
+
+The package builds against upstream's `k8s.io/cloud-provider-openstack`; without
+the fork's hooks nothing calls it, and without the fork's `BlockStorageClient`
+the plugin stays on upstream's path.
 
 ## Versions
 
-Images are `ghcr.io/singular-group/csi-direct-iscsi:<x.y.z.N>`: the last `x.y.z`
-tag and the commits since it, counted at the last commit that changed the image
-(`UPSTREAM`, `build.sh`, `patches/`, `directiscsi/` outside its tests). CI builds
-each version once on merge to `main` and pushes `:<x.y.z.N>` and `:latest`; a
-published version is never overwritten.
+Go module tags `vX.Y.Z`. A change here is released with a tag, then the fork's
+`go.mod` moves to it, which makes a new plugin image.
 
 ## License
 

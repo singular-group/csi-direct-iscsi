@@ -22,7 +22,8 @@ type cinderAPI interface {
 	deleteAttachment(ctx context.Context, id string) error
 }
 
-// blockStorageProvider is implemented by *openstack.OpenStack (patch 0003).
+// blockStorageProvider is implemented by *openstack.OpenStack in the fork that
+// builds this package in (README.md); upstream's lacks it and stays upstream.
 type blockStorageProvider interface {
 	BlockStorageClient() *gophercloud.ServiceClient
 }
