@@ -1,5 +1,5 @@
-# Pull requests and pushes: vet, upstream's suites and ours on the patched tree,
-# the image build. Pushes to main then publish :<x.y.z.N> and :latest.
+# Pull requests and pushes to main: vet, tests, and the race detector as root
+# (the chroot test). The image is built by the cloud-provider-openstack fork.
 name: ci
 
 on:
@@ -9,8 +9,7 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  # Never cancel a publish half-way (version pushed, :latest not yet).
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -20,90 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: ./build.sh .src
       - uses: actions/setup-go@v5
         with:
-          go-version-file: .src/go.mod
-      - working-directory: .src
-        run: |
+          go-version-file: go.mod
+      - run: |
           set -eo pipefail
-          test -z "$(gofmt -l pkg/csi/cinder/directiscsi)" || { gofmt -l pkg/csi/cinder/directiscsi; exit 1; }
-          go vet ./pkg/csi/cinder/... ./cmd/cinder-csi-plugin/
-          go test ./pkg/csi/cinder/... ./pkg/util/... ./tests/sanity/cinder/
-          # Ours only, as root (the chroot test): upstream's server_test races under -race.
-          sudo env "PATH=$PATH" "HOME=$HOME" "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" go test -race -count=1 ./pkg/csi/cinder/directiscsi/
-
-  build:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: ./build.sh .src
-      - run: docker build --target cinder-csi-plugin .src
-
-  publish:
-    if: github.event_name == 'push'
-    needs: [test]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # The version counts commits since the x.y.z tag: full history and tags.
-          fetch-depth: 0
-      - name: Derive the version
-        run: |
-          set -eo pipefail
-          [ "$(git rev-parse --is-shallow-repository)" = "false" ] || { echo "ERROR: shallow clone — the commit count would be wrong (fetch-depth: 0)" >&2; exit 1; }
-          # <x.y.z tag>.<commits since it>, counted at the last commit that changed
-          # the image, so a docs- or test-only merge keeps the same version.
-          IMAGE_COMMIT=$(git log -1 --format=%H -- UPSTREAM build.sh patches directiscsi ':(exclude)*_test.go')
-          [ -n "$IMAGE_COMMIT" ] || { echo "ERROR: no commit in this history touches the image sources" >&2; exit 1; }
-          # --exclude: a four-component tag would give a five-component version.
-          TAG=$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' --exclude '*.*.*.*' "$IMAGE_COMMIT" 2>/dev/null) || {
-            echo "ERROR: no x.y.z tag reachable from $IMAGE_COMMIT. Create the baseline: git tag -a 1.0.0 -m 'Baseline for derived image versions' <commit> && git push origin 1.0.0" >&2
-            exit 1
-          }
-          case "$TAG" in *[!0-9.]*|*..*) echo "ERROR: tag '$TAG' is not x.y.z with numeric parts" >&2; exit 1 ;; esac
-          VERSION="$TAG.$(git rev-list --count "$TAG..$IMAGE_COMMIT")"
-          echo "image version $VERSION, from $(git log -1 --format='%h %s' "$IMAGE_COMMIT")"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push
-        run: |
-          set -eo pipefail
-          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
-          # :latest follows the tip of main only: a re-run of an older commit
-          # must not move it back.
-          TIP=$(git ls-remote origin refs/heads/main | cut -f1)
-          # Published versions are never overwritten, so any answer other than
-          # "absent" stops the job.
-          if out=$(docker manifest inspect "$IMAGE:$VERSION" 2>&1); then
-            echo "$IMAGE:$VERSION is already published"
-            if [ "$TIP" = "$GITHUB_SHA" ]; then
-              docker buildx imagetools create --prefer-index=false --tag "$IMAGE:latest" "$IMAGE:$VERSION"
-            fi
-            exit 0
-          fi
-          case "$out" in
-            *"manifest unknown"*|*"denied"*) ;;
-            *) echo "ERROR: cannot tell whether $IMAGE:$VERSION exists: $out" >&2; exit 1 ;;
-          esac
-          . ./UPSTREAM
-          ./build.sh .src
-          docker build --target cinder-csi-plugin \
-            --build-arg VERSION="$UPSTREAM_TAG-$VERSION" \
-            --label org.opencontainers.image.version="$VERSION" \
-            --label org.opencontainers.image.revision="$GITHUB_SHA" \
-            --label org.opencontainers.image.source="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
-            -t "$IMAGE:$VERSION" -t "$IMAGE:latest" .src
-          docker push "$IMAGE:$VERSION"
-          if [ "$TIP" = "$GITHUB_SHA" ]; then
-            docker push "$IMAGE:latest"
-          fi
+          test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+          go vet ./...
+          sudo env "PATH=$PATH" "HOME=$HOME" "GOCACHE=$(go env GOCACHE)" "GOMODCACHE=$(go env GOMODCACHE)" go test -race -count=1 ./...

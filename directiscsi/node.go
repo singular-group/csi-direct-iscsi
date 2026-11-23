@@ -28,7 +28,7 @@ type Node struct {
 	exec     executor
 	sys      string // sysfs
 	dev      string // the host /dev, mounted by the DaemonSet
-	host     string // the host root, mounted by the patch
+	host     string // the host root, mounted into the node plugin
 	stateDir string
 	write    func(path, data string) error
 
