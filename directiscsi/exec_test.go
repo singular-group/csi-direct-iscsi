@@ -46,8 +46,16 @@ func TestHostExecRunsInTheHostRoot(t *testing.T) {
 	}
 	root := t.TempDir()
 	copyWithLibs(t, root, "/usr/bin/env", "/usr/bin/env")
-	copyWithLibs(t, root, "/bin/echo", "/usr/sbin/only-on-the-host")
+	copyWithLibs(t, root, "/bin/sh", "/bin/sh")
 	copyWithLibs(t, root, "/bin/false", "/usr/bin/false")
+	// A script, not a copied binary: a multi-call coreutils picks its program by name.
+	script := filepath.Join(root, "usr/sbin/only-on-the-host")
+	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	h := hostExec{root: root}
 
 	out, code, err := h.run(context.Background(), "only-on-the-host", "hello", "host")
