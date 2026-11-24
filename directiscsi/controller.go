@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/gophercloud/gophercloud/v2"
 	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/attachments"
 	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/volumes"
 	"google.golang.org/grpc/codes"
@@ -80,8 +81,9 @@ func (c csiNodes) nodes() map[string]string {
 
 var controller *Controller
 
-// SetupController enables the controller side when the config files carry [DirectISCSI].
-func SetupController(cloudConfig []string) error {
+// SetupController enables the controller side when the config files carry
+// [DirectISCSI]; blockStorage is a Cinder v3 client of the same cloud.
+func SetupController(cloudConfig []string, blockStorage *gophercloud.ServiceClient) error {
 	cfg, ok, err := readConfig(cloudConfig)
 	if err != nil || !ok {
 		return err
@@ -106,7 +108,8 @@ func SetupController(cloudConfig []string) error {
 	if !cache.WaitForCacheSync(ctx.Done(), synced) {
 		return fmt.Errorf("direct iSCSI: CSINode informer did not sync")
 	}
-	controller = newController(cfg, csiNodes{inf.Lister()}, cinderOf)
+	api := gopherCinder{blockStorage}
+	controller = newController(cfg, csiNodes{inf.Lister()}, func(openstack.IOpenStack) (cinderAPI, bool) { return api, true })
 	klog.Infof("direct iSCSI: controller on, storage network %s", cfg.StorageNetwork)
 	return nil
 }

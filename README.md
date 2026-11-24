@@ -1,18 +1,28 @@
 # csi-direct-iscsi
 
-The [OpenStack Cinder CSI plugin](https://github.com/kubernetes/cloud-provider-openstack)
-with a direct iSCSI path for HPE MSA multiattach volumes: the Kubernetes nodes
-log in to the array themselves instead of going through Nova, every volume is
-mapped to every node, and a SCSI-3 persistent reservation decides which node may
-write. Moving a volume to another node is a reservation PREEMPT on that node, with
-no Cinder, Nova or array mapping call on the way.
+A CSI proxy in front of the [OpenStack Cinder CSI plugin](https://github.com/kubernetes/cloud-provider-openstack)
+that adds a direct iSCSI path for HPE MSA multiattach volumes: the Kubernetes
+nodes log in to the array themselves instead of going through Nova, every volume
+is mapped to every node, and a SCSI-3 persistent reservation decides which node
+may write. Moving a volume to another node is a reservation PREEMPT on that node,
+with no Cinder, Nova or array mapping call on the way.
 
-This repo is the Go package `directiscsi`. The plugin that runs it is the
-[singular-group/cloud-provider-openstack](https://github.com/singular-group/cloud-provider-openstack)
-fork: a branch on upstream's release tag whose only changes are the hooks that
-call this package and the go.mod line that pulls it in. That fork builds and
-publishes the image. The driver name stays `cinder.csi.openstack.org`: the image
-replaces upstream's in an existing deployment.
+Upstream's plugin runs its official image, untouched, on another socket. The
+proxy listens on the CSI socket the sidecars and kubelet use, answers the calls of
+direct volumes and forwards everything else to upstream, so the driver name
+(`cinder.csi.openstack.org`) and existing PVs stay as they are.
+
+| Call | Proxy | Upstream |
+|------|-------|----------|
+| `CreateVolume` | swaps the class type for its `-multiattach` counterpart | creates |
+| `DeleteVolume` | removes a direct volume's attachments | deletes |
+| `ControllerPublishVolume` / `Unpublish` | direct volumes, and the conversion of Nova ones | Nova volumes |
+| `ListVolumes` / `ControllerGetVolume` | gives a server-less attachment its node | lists |
+| `NodeStageVolume` | direct: iSCSI, multipath, reservation, format and mount | Nova volumes |
+| `NodeUnstageVolume` | direct: reservation, map and paths, after upstream | unmounts |
+| `NodePublishVolume` | a direct raw block's bind mount | everything else |
+| `NodeExpandVolume` | direct: paths, map and filesystem | Nova volumes |
+| everything else | forwards | answers |
 
 ## How a volume is attached
 
@@ -43,6 +53,21 @@ Which one a volume is:
   the attacher retries. A volume that is never detached stays through Nova.
 - A **direct volume stays direct**, whatever the cluster's state.
 
+## Deployment
+
+In both plugin pods, upstream's `cinder-csi-plugin` listens on
+`unix:///csi/upstream.sock` and this proxy on the CSI socket the sidecars (and,
+on the nodes, the kubelet registration) already use:
+
+```
+csi-direct-iscsi --mode=controller|node --endpoint=unix:///csi/csi.sock \
+  --upstream-endpoint=unix:///csi/upstream.sock --cloud-config=<upstream's files> ...
+```
+
+The controller proxy reads upstream's `cloud.conf` for its own Cinder and Nova
+clients. The node proxy runs privileged like upstream's node plugin, with the
+kubelet directory (`Bidirectional`), `/dev`, and the node's root at `/host`.
+
 ## Requirements
 
 - **Cinder**: an HPE MSA iSCSI backend, and for each class type `<t>` a type
@@ -53,11 +78,11 @@ Which one a volume is:
   `iscsiadm`, `multipath` (with `multipathd` running) and `sg_persist`
   (sg3_utils), and `/etc/iscsi/initiatorname.iscsi` set to
   `<initiator-prefix><node name>`. Each node logs in to the portals at boot.
-- **Node plugin**: the node's root mounted at `/host` with `HostToContainer`
-  propagation (the plugin chroots into it to run the node's tools), and
-  `NODE_NAME` from `spec.nodeName`.
-- **Controller plugin**: a cloud-config user that sees attachment host names
-  (Cinder hides them from non-admins).
+- **Node proxy**: the node's root mounted at `/host` with `HostToContainer`
+  propagation (it chroots into it to run the node's iSCSI, multipath and sg3
+  tools), and `NODE_NAME` from `spec.nodeName`.
+- **Controller proxy**: a cloud-config user that sees attachment host names
+  (Cinder hides them from non-admins), and read access to CSINodes.
 
 ## Configuration
 
@@ -86,18 +111,22 @@ A `[DirectISCSI]` section in any of the `--cloud-config` files; without
 
 ```bash
 go vet ./...
-go test ./...
-sudo go test -race ./...   # the chroot test needs root
+go test ./...                 # unit tests and the CSI sanity suite through the proxy
+sudo go test -race ./...      # the chroot test needs root
+docker build -t csi-direct-iscsi .
 ```
 
-The package builds against upstream's `k8s.io/cloud-provider-openstack`; without
-the fork's hooks nothing calls it, and without the fork's `BlockStorageClient`
-the plugin stays on upstream's path.
+`test/sanity` runs the CSI sanity suite against the proxy with upstream's driver
+behind it, on upstream's fake cloud and mounts: every call is forwarded, and the
+results match upstream's own run.
 
 ## Versions
 
-Go module tags `vX.Y.Z`. A change here is released with a tag, then the fork's
-`go.mod` moves to it, which makes a new plugin image.
+Images are `ghcr.io/singular-group/csi-direct-iscsi:<x.y.z.N>`: the last `x.y.z`
+tag and the commits since it, counted at the last commit that changed the image
+(`cmd/`, `proxy/`, `directiscsi/` outside tests, `go.mod`, `go.sum`,
+`Dockerfile`). CI builds each version once on merge to `main` and pushes
+`:<x.y.z.N>` and `:latest`; a published version is never overwritten.
 
 ## License
 
