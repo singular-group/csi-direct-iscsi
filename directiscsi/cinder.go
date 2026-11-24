@@ -7,8 +7,6 @@ import (
 	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/attachments"
 	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/volumes"
 	"github.com/gophercloud/gophercloud/v2/openstack/blockstorage/v3/volumetypes"
-
-	"k8s.io/cloud-provider-openstack/pkg/csi/cinder/openstack"
 )
 
 // cinderAPI is the Cinder surface the hooks need beyond openstack.IOpenStack.
@@ -20,20 +18,6 @@ type cinderAPI interface {
 	getAttachment(ctx context.Context, id string) (*attachments.Attachment, error)
 	listAttachments(ctx context.Context, volumeID string) ([]attachments.Attachment, error)
 	deleteAttachment(ctx context.Context, id string) error
-}
-
-// blockStorageProvider is implemented by *openstack.OpenStack in the fork that
-// builds this package in (README.md); upstream's lacks it and stays upstream.
-type blockStorageProvider interface {
-	BlockStorageClient() *gophercloud.ServiceClient
-}
-
-func cinderOf(cloud openstack.IOpenStack) (cinderAPI, bool) {
-	p, ok := cloud.(blockStorageProvider)
-	if !ok {
-		return nil, false
-	}
-	return gopherCinder{p.BlockStorageClient()}, true
 }
 
 type gopherCinder struct {
